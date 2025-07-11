@@ -14,9 +14,9 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4 # 更新 action 版本
         with:
-          node-version: '18'
+          node-version: '20' # <-- 修正：將 Node.js 版本從 18 改為 20
       
       - name: Install Wrangler
         run: npm install -g wrangler
