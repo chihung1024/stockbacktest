@@ -3,7 +3,7 @@ name: Update Stock Data (Matrix Strategy)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 18 * * *"
+    - cron: "0 0 * * *"
 
 jobs:
   # --- 作業一：更新基本面資料 ---
