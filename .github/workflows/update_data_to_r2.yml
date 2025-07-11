@@ -1,0 +1,47 @@
+name: Update Stock Data and Upload to R2
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *"
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Run data update script
+        run: python scripts/update_data.py
+
+      - name: Upload data to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # 將預處理的 JSON 檔案上傳
+          wrangler r2 object put "${{ secrets.R2_BUCKET_NAME }}/preprocessed_data.json" --file="./dist/preprocessed_data.json" --content-type "application/json"
+          
+          # 將所有價格 CSV 檔案上傳到 prices/ 子目錄
+          find ./dist/prices -type f -name "*.csv" | while read f; do
+            wrangler r2 object put "${{ secrets.R2_BUCKET_NAME }}/prices/$(basename $f)" --file="$f" --content-type "text/csv"
+          done
