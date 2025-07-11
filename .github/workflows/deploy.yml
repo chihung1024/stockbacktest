@@ -1,0 +1,32 @@
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches:
+      - main # 當 main 分支有更新時觸發
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
+      - name: Deploy Worker and Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # 使用 wrangler 直接部署 Pages 專案
+          # 它會自動讀取 wrangler.toml 的設定來部署 Worker
+          # 並將 public 資料夾部署為 Pages，同時建立兩者之間的連結
+          wrangler pages deploy public --project-name=stockbacktest --branch=main
