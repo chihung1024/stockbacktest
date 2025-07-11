@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>股票回測系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { 
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            background: #f0f2f5;
+        }
+        .gradient-text {
+            background: -webkit-linear-gradient(45deg, #4f46e5, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center min-h-screen">
+    <div class="text-center p-8 max-w-2xl mx-auto">
+        <div class="bg-white p-10 rounded-2xl shadow-xl">
+            <h1 class="text-4xl md:text-5xl font-bold gradient-text mb-4">
+                股票回測與分析平台
+            </h1>
+            <p class="text-gray-600 mb-8 text-lg">
+                一個基於 Cloudflare 全球網路的現代化、高效能回測工具，協助您驗證投資策略。
+            </p>
+            <a href="/backtest.html" 
+               class="inline-block bg-indigo-600 text-white font-bold py-3 px-8 rounded-lg text-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-transform transform hover:scale-105 shadow-lg">
+                🚀 進入回測系統
+            </a>
+        </div>
+        <p class="text-gray-400 text-sm mt-6">
+            Powered by Cloudflare Pages, Workers, R2, and GitHub Actions.
+        </p>
+    </div>
+</body>
+</html>
