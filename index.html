@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的第一個 Cloudflare 網站</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+        .container {
+            text-align: center;
+            padding: 40px;
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #007BFF;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎉 恭喜！您的網站已成功部署！</h1>
+        <p>這個網站是透過 GitHub 和 Cloudflare Pages 全線上操作完成的。</p>
+        <p>現在時間是：<span id="time"></span></p>
+    </div>
+    <script>
+        function updateTime() {
+            const timeElement = document.getElementById('time');
+            if (timeElement) {
+                timeElement.innerText = new Date().toLocaleString('zh-TW');
+            }
+        }
+        setInterval(updateTime, 1000);
+        updateTime();
+    </script>
+</body>
+</html>
