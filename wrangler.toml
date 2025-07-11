@@ -1,3 +1,6 @@
+# 這是您在 Cloudflare 上的 Pages 專案名稱
+name = "stockbacktest"
+
 # 這個欄位告訴 Cloudflare Pages，您的靜態網站檔案在哪個資料夾
 pages_build_output_dir = "public"
 
@@ -5,7 +8,6 @@ pages_build_output_dir = "public"
 compatibility_date = "2023-10-30"
 
 # 這是將 R2 儲存貯體「繫結」到您 Worker 的設定
-# 這是最重要的部分，因為它無法被自動偵測
 [[r2_buckets]]
 binding = "STOCK_DATA_BUCKET"
-bucket_name = "stockbacktest-data" # 請確認這裡的名稱和您在 R2 建立的儲存貯體名稱完全一致
+bucket_name = "stockbacktest-data"
