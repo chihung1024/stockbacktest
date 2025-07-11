@@ -1,7 +1,12 @@
+# 這個欄位告訴 Cloudflare Pages，您的靜態網站檔案在哪個資料夾
+pages_build_output_dir = "public"
+
+# 以下是您的 Worker (後端 API) 的設定
 name = "stockbacktest-worker"
 main = "worker/src/index.ts"
 compatibility_date = "2023-10-30"
 
+# 這是將 R2 儲存貯體「繫結」到您 Worker 的設定
 [[r2_buckets]]
 binding = "STOCK_DATA_BUCKET"
 bucket_name = "stockbacktest-data" # 請確認這裡的名稱和您在 R2 建立的儲存貯體名稱完全一致
