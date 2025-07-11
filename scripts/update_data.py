@@ -2,7 +2,7 @@ import pandas as pd
 import yfinance as yf
 import json
 import time
-import sys # 匯入 sys 模組
+import sys
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
@@ -16,15 +16,15 @@ PREPROCESSED_JSON_PATH = output_folder / "preprocessed_data.json"
 
 MAX_WORKERS = 20
 
-# --- 數據源獲取函式 (加入更詳細的錯誤日誌) ---
+# --- 數據源獲取函式 ---
 def get_etf_holdings(etf_ticker):
     try:
         etf = yf.Ticker(etf_ticker)
-        holdings = etf.holdings
-        if holdings is not None and not holdings.empty:
+        # yfinance 的 .holdings 可能不穩定，加入 hasattr 檢查
+        if hasattr(etf, 'holdings') and etf.holdings is not None and not etf.holdings.empty:
             print(f"成功從 yfinance 獲取 {etf_ticker} 的成分股。")
-            return holdings['symbol'].tolist()
-        print(f"警告：yfinance 回傳了 {etf_ticker} 的空成分股列表。")
+            return etf.holdings['symbol'].tolist()
+        print(f"警告：yfinance 無法提供 {etf_ticker} 的成分股列表。")
         return []
     except Exception as e:
         print(f"錯誤：從 yfinance 獲取 {etf_ticker} 成分股時失敗: {e}")
@@ -38,6 +38,16 @@ def get_sp500_from_wiki():
         return tables[0]['Symbol'].str.replace('.', '-', regex=False).tolist()
     except Exception as e:
         print(f"錯誤：從維基百科獲取 S&P 500 成分股時失敗: {e}")
+        return []
+
+def get_nasdaq100_from_wiki():
+    try:
+        url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+        tables = pd.read_html(url)
+        print("成功從維基百科獲取 Nasdaq-100 成分股。")
+        return tables[4]['Ticker'].tolist()
+    except Exception as e:
+        print(f"錯誤：從維基百科獲取 Nasdaq-100 成分股時失敗: {e}")
         return []
 
 # --- 其他函式維持不變 ---
@@ -67,22 +77,25 @@ def fetch_price_history(ticker):
     except Exception:
         return ticker, False
 
-# --- 主執行函式 (加入最終檢查) ---
+# --- 主執行函式 ---
 def main():
     print("--- 開始獲取指數成分股列表 ---")
     sp500_tickers = get_sp500_from_wiki()
-    # 如果維基百科失敗，嘗試從 ETF 獲取作為備案
     if not sp500_tickers:
-        print("維基百科獲取失敗，嘗試從 VOO ETF 獲取...")
+        print("維基百科獲取 S&P 500 失敗，嘗試從 VOO ETF 獲取...")
         sp500_tickers = get_etf_holdings("VOO")
         
-    nasdaq100_tickers = get_etf_holdings("QQQ")
+    nasdaq100_tickers = get_nasdaq100_from_wiki()
+    if not nasdaq100_tickers:
+        print("維基百科獲取 Nasdaq-100 失敗，嘗試從 QQQ ETF 獲取...")
+        nasdaq100_tickers = get_etf_holdings("QQQ")
     
-    all_unique_tickers = sorted(list(set(sp500_tickers).union(set(nasdaq_tickers))))
+    # 修正拼寫錯誤：nasdaq_tickers -> nasdaq100_tickers
+    all_unique_tickers = sorted(list(set(sp500_tickers).union(set(nasdaq100_tickers))))
 
     if not all_unique_tickers:
         print("致命錯誤：所有數據來源均無法獲取任何成分股，終止執行。")
-        sys.exit(1) # 讓腳本以錯誤狀態結束，GitHub Actions 會知道這一步失敗了
+        sys.exit(1)
         
     print(f"總共找到 {len(all_unique_tickers)} 支不重複的股票。")
 
