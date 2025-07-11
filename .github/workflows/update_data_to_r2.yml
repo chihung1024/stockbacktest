@@ -23,15 +23,21 @@ jobs:
           pip install -r requirements.txt
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4 # 更新 action 版本
+        uses: actions/setup-node@v4
         with:
-          node-version: '20' # <-- 修正：將 Node.js 版本從 18 改為 20
+          node-version: '20'
 
       - name: Install Wrangler
         run: npm install -g wrangler
 
       - name: Run data update script
         run: python scripts/update_data.py
+
+      # --- 新增的除錯步驟 ---
+      # 這個步驟會列出當前工作目錄下的所有檔案和資料夾
+      # 讓我們可以確認 Python 腳本是否成功建立了 dist 資料夾和裡面的檔案
+      - name: List files in the workspace
+        run: ls -R
 
       - name: Upload data to R2
         env:
