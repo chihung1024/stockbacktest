@@ -33,21 +33,25 @@ jobs:
       - name: Run data update script
         run: python scripts/update_data.py
 
-      # --- 新增的除錯步驟 ---
-      # 這個步驟會列出當前工作目錄下的所有檔案和資料夾
-      # 讓我們可以確認 Python 腳本是否成功建立了 dist 資料夾和裡面的檔案
-      - name: List files in the workspace
-        run: ls -R
+      # --- 新增的檔案存在性檢查 ---
+      - name: Verify that the files were created
+        run: |
+          if [ ! -f ./dist/preprocessed_data.json ]; then
+            echo "Error: preprocessed_data.json was not created."
+            exit 1
+          fi
+          if [ -z "$(ls -A ./dist/prices)" ]; then
+            echo "Error: The prices directory is empty."
+            exit 1
+          fi
+          echo "All required files were created successfully."
 
       - name: Upload data to R2
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          # 將預處理的 JSON 檔案上傳
           wrangler r2 object put "${{ secrets.R2_BUCKET_NAME }}/preprocessed_data.json" --file="./dist/preprocessed_data.json" --content-type "application/json"
-          
-          # 將所有價格 CSV 檔案上傳到 prices/ 子目錄
           find ./dist/prices -type f -name "*.csv" | while read f; do
             wrangler r2 object put "${{ secrets.R2_BUCKET_NAME }}/prices/$(basename $f)" --file="$f" --content-type "text/csv"
           done
