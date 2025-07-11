@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>美股投資組合回測系統 (Cloudflare 部署版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; }
+        .info-icon { cursor: pointer; display: inline-block; margin-left: 4px; color: #9ca3af; position: relative; }
+        .tooltip { visibility: hidden; width: 220px; background-color: #1f2937; color: #fff; text-align: center; border-radius: 6px; padding: 8px; position: absolute; z-index: 10; bottom: 125%; left: 50%; margin-left: -110px; opacity: 0; transition: opacity 0.3s; }
+        .info-icon:hover .tooltip { visibility: visible; opacity: 1; }
+        .loader { border: 5px solid #f3f3f3; border-top: 5px solid #3498db; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .error-message { background-color: #fee2e2; color: #b91c1c; border-left: 4px solid #ef4444; padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; word-break: break-all; }
+        #portfolio-grid input[type="text"], #portfolio-grid input[type="number"] { width: 100%; padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 0.375rem; }
+        #portfolio-grid th, #portfolio-grid td { padding: 0.5rem; text-align: center; }
+        #portfolio-grid thead { background-color: #f9fafb; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+    <div class="container mx-auto p-4 md:p-8 max-w-screen-xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">美股回測系統 (Cloudflare 版)</h1>
+            <p class="text-gray-600 mt-2">使用 Pages + Workers + R2 + GitHub Actions</p>
+        </header>
+
+        <div class="bg-white p-6 rounded-2xl shadow-lg mb-8">
+            <h2 class="text-2xl font-bold mb-6 border-b pb-4">回測參數設定</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
+                <div>
+                    <label for="initialAmount" class="block text-sm font-medium text-gray-700">初始投資金額 ($)</label>
+                    <input type="number" id="initialAmount" value="10000" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div class="space-y-4">
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label for="startYear" class="block text-sm font-medium text-gray-700">起始</label>
+                            <select id="startYear" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></select>
+                        </div>
+                        <div>
+                            <label for="startMonth" class="block text-sm font-medium text-gray-700">&nbsp;</label>
+                            <select id="startMonth" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></select>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label for="endYear" class="block text-sm font-medium text-gray-700">結束</label>
+                            <select id="endYear" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></select>
+                        </div>
+                        <div>
+                            <label for="endMonth" class="block text-sm font-medium text-gray-700">&nbsp;</label>
+                            <select id="endMonth" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500"></select>
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <label for="rebalancingPeriod" class="block text-sm font-medium text-gray-700">再平衡週期</label>
+                    <select id="rebalancingPeriod" class="mt-1 block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="never">從不</option>
+                        <option value="annually" selected>每年</option>
+                        <option value="quarterly">每季</option>
+                        <option value="monthly">每月</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="benchmark" class="block text-sm font-medium text-gray-700">比較基準</label>
+                    <input type="text" id="benchmark" value="SPY" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 uppercase" placeholder="例如: SPY">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">股息再投入
+                        <span class="info-icon">ⓘ<span class="tooltip">yfinance 的調整後股價已隱含股息再投入的總報酬，此為標準回測方法。</span></span>
+                    </label>
+                    <div class="mt-1 w-full py-2 px-3 border border-gray-200 bg-gray-100 rounded-md text-gray-500">是 (預設)</div>
+                </div>
+            </div>
+
+            <div class="mt-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-xl font-semibold">投資組合資產配置</h3>
+                    <div class="flex items-center space-x-4">
+                        <button id="add-asset-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg transition-colors">＋ 新增資產</button>
+                        <button id="add-portfolio-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 font-bold py-2 px-4 rounded-lg transition-colors">＋ 新增投資組合</button>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table id="portfolio-grid" class="w-full">
+                        <thead></thead>
+                        <tbody></tbody>
+                        <tfoot></tfoot>
+                    </table>
+                </div>
+            </div>
+
+            <div class="mt-6">
+                <div id="error-container"></div>
+                <button id="run-backtest" class="w-full bg-indigo-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-transform transform hover:scale-105 shadow-md text-lg">🚀 執行投資組合回測</button>
+            </div>
+
+            <div id="results-panel" class="hidden mt-8">
+                <div class="text-center mb-8" id="loader">
+                    <div class="loader mx-auto"></div>
+                    <p class="mt-4 text-gray-600">正在請求後端 Worker 進行計算，請稍候...</p>
+                </div>
+                <div id="warning-container"></div>
+                <div id="results-content" class="hidden">
+                    <div class="bg-white p-6 rounded-2xl shadow-lg mb-8">
+                        <h2 class="text-2xl font-bold mb-4">投資組合價值增長</h2>
+                        <div class="h-96"><canvas id="portfolio-chart"></canvas></div>
+                    </div>
+                    <div class="bg-white p-6 rounded-2xl shadow-lg">
+                        <h2 class="text-2xl font-bold mb-4">績效總覽</h2>
+                        <div class="overflow-x-auto">
+                            <table id="summary-table" class="w-full text-center"></table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 全域變數和初始設定 ---
+        const MAX_PORTFOLIOS = 5;
+        const MAX_ASSETS = 10;
+        let assetCount = 3;
+        let portfolioCount = 1;
+        let portfolioChart;
+
+        // --- DOM 元素 ---
+        const elements = {
+            addAssetBtn: document.getElementById('add-asset-btn'),
+            addPortfolioBtn: document.getElementById('add-portfolio-btn'),
+            portfolioGrid: document.getElementById('portfolio-grid'),
+            runBacktestBtn: document.getElementById('run-backtest'),
+            resultsPanel: document.getElementById('results-panel'),
+            loader: document.getElementById('loader'),
+            resultsContent: document.getElementById('results-content'),
+            errorContainer: document.getElementById('error-container'),
+            warningContainer: document.getElementById('warning-container'),
+            summaryTable: document.getElementById('summary-table'),
+            portfolioChartCanvas: document.getElementById('portfolio-chart'),
+            initialAmount: document.getElementById('initialAmount'),
+            startYear: document.getElementById('startYear'),
+            startMonth: document.getElementById('startMonth'),
+            endYear: document.getElementById('endYear'),
+            endMonth: document.getElementById('endMonth'),
+            rebalancingPeriod: document.getElementById('rebalancingPeriod'),
+            benchmark: document.getElementById('benchmark'),
+        };
+
+        // --- 初始化函式 ---
+        function initialize() {
+            populateDateSelectors();
+            renderPortfolioGrid();
+            addEventListeners();
+        }
+
+        function populateDateSelectors() {
+            const currentYear = new Date().getFullYear();
+            const years = Array.from({ length: currentYear - 1989 }, (_, i) => currentYear - i);
+            const months = Array.from({ length: 12 }, (_, i) => i + 1);
+
+            const populate = (select, options, defaultValue) => {
+                options.forEach(option => {
+                    const opt = document.createElement('option');
+                    opt.value = opt.textContent = option;
+                    select.appendChild(opt);
+                });
+                select.value = defaultValue;
+            };
+
+            populate(elements.startYear, years, currentYear - 10);
+            populate(elements.endYear, years, currentYear);
+            populate(elements.startMonth, months, 1);
+            populate(elements.endMonth, months, new Date().getMonth() + 1);
+        }
+
+        // --- 渲染函式 ---
+        function renderPortfolioGrid() {
+            const thead = elements.portfolioGrid.querySelector('thead') || document.createElement('thead');
+            const tbody = elements.portfolioGrid.querySelector('tbody') || document.createElement('tbody');
+            const tfoot = elements.portfolioGrid.querySelector('tfoot') || document.createElement('tfoot');
+
+            // 渲染表頭
+            let headerHtml = '<tr><th class="w-1/4">股票代碼</th>';
+            for (let i = 1; i <= portfolioCount; i++) {
+                headerHtml += `<th>投組 ${i} <button class="text-red-500 remove-portfolio-btn" data-p-index="${i}" ${portfolioCount === 1 ? 'hidden' : ''}>🗑️</button></th>`;
+            }
+            headerHtml += '<th></th></tr>';
+            thead.innerHTML = headerHtml;
+
+            // 渲染表格內容
+            tbody.innerHTML = '';
+            for (let i = 0; i < assetCount; i++) {
+                let rowHtml = `<tr><td><input type="text" class="ticker-input uppercase" placeholder="例如: AAPL"></td>`;
+                for (let j = 1; j <= portfolioCount; j++) {
+                    rowHtml += `<td><input type="number" class="weight-input" min="0" max="100" placeholder="%" data-p-index="${j}"></td>`;
+                }
+                rowHtml += `<td><button class="text-red-500 remove-asset-btn" ${assetCount === 1 ? 'hidden' : ''}>✖</button></td></tr>`;
+                tbody.insertAdjacentHTML('beforeend', rowHtml);
+            }
+
+            // 渲染表尾
+            let footerHtml = '<tr><td>總計</td>';
+            for (let i = 1; i <= portfolioCount; i++) {
+                footerHtml += `<td class="total-weight" data-p-index="${i}">0%</td>`;
+            }
+            footerHtml += '<td></td></tr>';
+            tfoot.innerHTML = footerHtml;
+
+            elements.portfolioGrid.append(thead, tbody, tfoot);
+            updateEventListenersForGrid();
+        }
+
+        // --- 事件監聽器 ---
+        function addEventListeners() {
+            elements.addAssetBtn.addEventListener('click', addAsset);
+            elements.addPortfolioBtn.addEventListener('click', addPortfolio);
+            elements.runBacktestBtn.addEventListener('click', runBacktest);
+        }
+
+        function updateEventListenersForGrid() {
+            document.querySelectorAll('.weight-input').forEach(input => input.addEventListener('input', updateTotals));
+            document.querySelectorAll('.remove-asset-btn').forEach(btn => btn.addEventListener('click', removeAsset));
+            document.querySelectorAll('.remove-portfolio-btn').forEach(btn => btn.addEventListener('click', removePortfolio));
+        }
+
+        // --- 邏輯處理函式 ---
+        function addAsset() {
+            if (assetCount < MAX_ASSETS) {
+                assetCount++;
+                renderPortfolioGrid();
+            }
+        }
+
+        function removeAsset(event) {
+            if (assetCount > 1) {
+                event.target.closest('tr').remove();
+                assetCount--;
+                document.querySelectorAll('.remove-asset-btn').forEach(btn => btn.hidden = (assetCount === 1));
+                updateTotals();
+            }
+        }
+
+        function addPortfolio() {
+            if (portfolioCount < MAX_PORTFOLIOS) {
+                portfolioCount++;
+                renderPortfolioGrid();
+            }
+        }
+
+        function removePortfolio(event) {
+            if (portfolioCount > 1) {
+                const pIndexToRemove = event.target.dataset.pIndex;
+                portfolioCount--;
+                renderPortfolioGrid();
+                // TODO: 在渲染後需要重新填寫已有的數據
+            }
+        }
+
+        function updateTotals() {
+            for (let i = 1; i <= portfolioCount; i++) {
+                const weights = Array.from(document.querySelectorAll(`.weight-input[data-p-index="${i}"]`)).map(input => parseFloat(input.value) || 0);
+                const total = weights.reduce((sum, w) => sum + w, 0);
+                const totalCell = document.querySelector(`.total-weight[data-p-index="${i}"]`);
+                totalCell.textContent = `${total}%`;
+                totalCell.classList.toggle('text-red-500', total !== 100);
+            }
+        }
+
+        async function runBacktest() {
+            // 1. 收集數據
+            const portfolios = [];
+            let hasError = false;
+            elements.errorContainer.innerHTML = '';
+
+            for (let i = 1; i <= portfolioCount; i++) {
+                const tickers = [];
+                const weights = [];
+                let totalWeight = 0;
+                const rows = elements.portfolioGrid.querySelectorAll('tbody tr');
+                rows.forEach(row => {
+                    const tickerInput = row.querySelector('.ticker-input');
+                    const weightInput = row.querySelector(`.weight-input[data-p-index="${i}"]`);
+                    if (tickerInput.value && weightInput.value) {
+                        tickers.push(tickerInput.value.toUpperCase());
+                        const weight = parseFloat(weightInput.value);
+                        weights.push(weight);
+                        totalWeight += weight;
+                    }
+                });
+
+                if (tickers.length > 0 && totalWeight !== 100) {
+                    showError(`投組 ${i} 的總權重必須等於 100%，目前為 ${totalWeight}%。`);
+                    hasError = true;
+                }
+                
+                if (tickers.length > 0) {
+                    portfolios.push({
+                        name: `投組 ${i}`,
+                        tickers,
+                        weights,
+                        rebalancingPeriod: elements.rebalancingPeriod.value
+                    });
+                }
+            }
+
+            if (hasError) return;
+            if (portfolios.length === 0) {
+                showError('請至少設定一個包含資產的投資組合。');
+                return;
+            }
+
+            const payload = {
+                portfolios,
+                initialAmount: parseFloat(elements.initialAmount.value),
+                startYear: elements.startYear.value,
+                startMonth: elements.startMonth.value,
+                endYear: elements.endYear.value,
+                endMonth: elements.endMonth.value,
+                benchmark: elements.benchmark.value.toUpperCase()
+            };
+
+            // 2. 顯示載入動畫並發送請求
+            elements.resultsPanel.classList.remove('hidden');
+            elements.loader.classList.remove('hidden');
+            elements.resultsContent.classList.add('hidden');
+            elements.warningContainer.innerHTML = '';
+
+
+            try {
+                // 注意：這裡的 /api/backtest 會被 Cloudflare Pages 轉發到您的 Worker
+                const response = await fetch('/api/backtest', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `伺服器錯誤: ${response.status}`);
+                }
+
+                const results = await response.json();
+                
+                if (results.warning) {
+                    elements.warningContainer.innerHTML = `<div class="bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4" role="alert"><p class="font-bold">請注意</p><p>${results.warning}</p></div>`;
+                }
+
+                // 3. 渲染結果
+                renderResults(results);
+
+            } catch (error) {
+                showError(`回測失敗: ${error.message}`);
+            } finally {
+                elements.loader.classList.add('hidden');
+            }
+        }
+
+        function showError(message) {
+            elements.errorContainer.innerHTML = `<div class="error-message">${message}</div>`;
+        }
+
+        // --- 結果渲染函式 ---
+        function renderResults(results) {
+            elements.resultsContent.classList.remove('hidden');
+            renderSummaryTable(results.data, results.benchmark);
+            renderPortfolioValueChart(results.data, results.benchmark);
+        }
+
+        function renderSummaryTable(portfolios, benchmark) {
+            const headers = ['指標', ...portfolios.map(p => p.name)];
+            if (benchmark) headers.push(benchmark.name + ' (基準)');
+
+            const formatPercent = (val) => (val * 100).toFixed(2) + '%';
+            const formatNumber = (val) => val ? val.toFixed(2) : 'N/A';
+
+            const rows = [
+                { label: '年化報酬率 (CAGR)', key: 'cagr', format: formatPercent },
+                { label: '最大回撤 (MDD)', key: 'mdd', format: formatPercent },
+                { label: '波動率', key: 'volatility', format: formatPercent },
+                { label: '夏普比率', key: 'sharpe_ratio', format: formatNumber },
+                { label: '索提諾比率', key: 'sortino_ratio', format: formatNumber },
+                { label: 'Beta (β)', key: 'beta', format: formatNumber },
+                { label: 'Alpha (α)', key: 'alpha', format: formatPercent },
+            ];
+
+            let tableHtml = '<thead><tr class="bg-gray-100">';
+            headers.forEach(h => tableHtml += `<th class="p-3">${h}</th>`);
+            tableHtml += '</tr></thead><tbody>';
+
+            rows.forEach(row => {
+                tableHtml += '<tr class="border-b">';
+                tableHtml += `<td class="p-3 font-medium text-left">${row.label}</td>`;
+                portfolios.forEach(p => tableHtml += `<td class="p-3">${row.format(p[row.key])}</td>`);
+                if (benchmark) tableHtml += `<td class="p-3">${row.format(benchmark[row.key])}</td>`;
+                tableHtml += '</tr>';
+            });
+
+            tableHtml += '</tbody>';
+            elements.summaryTable.innerHTML = tableHtml;
+        }
+
+        function renderPortfolioValueChart(portfolios, benchmark) {
+            const datasets = [];
+            const colors = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#6366F1'];
+
+            portfolios.forEach((p, i) => {
+                datasets.push({
+                    label: p.name,
+                    data: p.portfolioHistory,
+                    borderColor: colors[i % colors.length],
+                    backgroundColor: colors[i % colors.length] + '1A',
+                    fill: false,
+                    tension: 0.1,
+                    parsing: {
+                        xKey: 'date',
+                        yKey: 'value'
+                    }
+                });
+            });
+
+            if (benchmark) {
+                datasets.push({
+                    label: benchmark.name + ' (基準)',
+                    data: benchmark.portfolioHistory,
+                    borderColor: '#6B7280',
+                    backgroundColor: '#6B72801A',
+                    fill: false,
+                    borderDash: [5, 5],
+                    tension: 0.1,
+                    parsing: {
+                        xKey: 'date',
+                        yKey: 'value'
+                    }
+                });
+            }
+
+            if (portfolioChart) {
+                portfolioChart.destroy();
+            }
+
+            portfolioChart = new Chart(elements.portfolioChartCanvas, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { type: 'time', time: { unit: 'year' } },
+                        y: { type: 'logarithmic', ticks: {
+                            callback: function(value, index, values) {
+                                if (value === 1000000) return '$1M';
+                                if (value === 100000) return '$100K';
+                                if (value === 10000) return '$10K';
+                                return '$' + value / 1000 + 'K';
+                            }
+                        }}
+                    }
+                }
+            });
+        }
+
+        // --- 啟動應用 ---
+        document.addEventListener('DOMContentLoaded', initialize);
+    </script>
+</body>
+</html>
