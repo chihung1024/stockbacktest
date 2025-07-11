@@ -1,0 +1,7 @@
+name = "stockbacktest-worker"
+main = "worker/src/index.ts"
+compatibility_date = "2023-10-30"
+
+[[r2_buckets]]
+binding = "STOCK_DATA_BUCKET"
+bucket_name = "stockbacktest-data" # 請確認這裡的名稱和您在 R2 建立的儲存貯體名稱完全一致
