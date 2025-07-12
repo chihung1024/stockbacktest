@@ -1,17 +1,15 @@
 # wrangler.toml
 
 # 這是您在 Cloudflare 上的 Pages 專案名稱
-# 請記得將 "stockbacktest-deploy" 換成您在步驟一中建立的最新專案名稱
+# 請確保 "stockbacktest-deploy" 是您最新的 "Direct Upload" 專案名稱
 name = "stockbacktest-deploy"
 
+# 這是靜態網站檔案所在的資料夾
+# 這個設定可以解決日誌中 'missing the "pages_build_output_dir" field' 的警告
+pages_build_output_dir = "public"
+
 # 這是將 R2 儲存貯體「繫結」到您 Worker 的設定
+# Wrangler 會自動偵測到 functions 目錄並將其與 R2 繫結
 [[r2_buckets]]
 binding = "STOCK_DATA_BUCKET"
 bucket_name = "stockbacktest-data"
-
-# [新增] 這是告訴 Wrangler 我們 Pages 專案的結構
-[pages_build_output]
-# 靜態檔案的目錄
-dir = "public"
-# Pages Functions 的根目錄
-functions-root = "functions"
