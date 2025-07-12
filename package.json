@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "deploy": "wrangler pages deploy public"
+    "deploy": "wrangler pages deploy public --project-name=stockbacktest-deploy"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20231025.0",
