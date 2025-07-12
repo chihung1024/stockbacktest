@@ -1,5 +1,5 @@
 # 這是您在 Cloudflare 上的 Pages 專案名稱，必須與專案名稱完全相符
-name = "stockbacktest"
+name = "stockbacktest-app"
 
 # 這個欄位告訴 Cloudflare Pages，您的靜態網站檔案在哪個資料夾
 pages_build_output_dir = "public"
