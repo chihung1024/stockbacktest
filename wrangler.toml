@@ -2,7 +2,7 @@
 
 # 這是您在 Cloudflare 上的 Pages 專案名稱
 # 請記得將 "stockbacktest-deploy" 換成您在步驟一中建立的最新專案名稱
-name = "stockbacktest-final"
+name = "stockbacktest-deploy"
 
 # 這是將 R2 儲存貯體「繫結」到您 Worker 的設定
 [[r2_buckets]]
