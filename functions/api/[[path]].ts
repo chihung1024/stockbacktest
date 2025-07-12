@@ -27,7 +27,8 @@ const RISK_FREE_RATE = 0.0;
 const EPSILON = 1e-9;
 
 // --- 主路由器 ---
-const router = Router({ base: '/api' });
+// itty-router 會自動處理 /api 前綴，因為檔案路徑是 /functions/api/[[path]].ts
+const router = Router(); 
 
 // --- 輔助函式：為最終回應添加標頭 ---
 const finalizeResponse = (response: Response) => {
@@ -41,7 +42,6 @@ const finalizeResponse = (response: Response) => {
 
 // --- API 路由 ---
 router.post('/backtest', async (request: IRequest, env: Env) => {
-    // 這裡的 try...catch 捕捉核心業務邏輯的錯誤
     try {
         const payload: BacktestPayload = await request.json();
         
@@ -52,29 +52,28 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
         }
 
         const rawPriceData: { [ticker: string]: Map<string, number> } = {};
+        const missingTickers: string[] = [];
+
+        // 優化：平行地從 R2 獲取所有需要的 CSV 檔案
         const promises = Array.from(allTickers).map(async (ticker) => {
             const object = await env.STOCK_DATA_BUCKET.get(`prices/${ticker}.csv`);
-            let csvText: string | null;
-
             if (object === null) {
-                console.warn(`在 R2 中找不到 ${ticker}.csv，將嘗試從 yfinance 即時獲取。`);
-                csvText = await fetchAndCacheFromYfinance(ticker, env);
+                // 如果在 R2 找不到檔案，就記錄下來
+                missingTickers.push(ticker);
             } else {
-                csvText = await object.text();
-            }
-            
-            if (csvText) {
+                const csvText = await object.text();
                 rawPriceData[ticker] = parseCsvToMap(csvText);
-            } else {
-                // 如果任何一個 ticker 數據獲取失敗，就拋出錯誤
-                throw new Error(`無法獲取股票 ${ticker} 的數據。`);
             }
         });
         await Promise.all(promises);
 
+        // 如果有任何股票資料缺失，就回傳一個清晰的錯誤訊息
+        if (missingTickers.length > 0) {
+            return error(400, `無法在 R2 儲存體中找到以下股票的數據，請檢查資料更新流程: ${missingTickers.join(', ')}`);
+        }
+
         const alignedPriceData = createAlignedPriceData(rawPriceData, payload);
         if (alignedPriceData.dates.length < 2) {
-             // 使用 itty-router 的 error helper 回傳一個帶有 400 狀態的 Response
              return error(400, '在指定的時間範圍內，找不到足夠的共同交易日來進行回測。');
         }
 
@@ -92,7 +91,6 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
             portfolioHistory: benchmarkHistory
         } : null;
         
-        // 使用 itty-router 的 json helper 回傳一個帶有 200 狀態的 Response
         return json({
             data: resultsData,
             benchmark: benchmarkResult,
@@ -101,43 +99,11 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
 
     } catch (e: any) {
         console.error("回測時發生錯誤:", e.stack);
-        // 如果 try 區塊中發生任何錯誤，回傳一個 500 狀態的 Response
         return error(500, `伺服器內部錯誤: ${e.message}`);
     }
 });
 
-// --- 核心邏輯函式 (與之前版本相同，但有小修正) ---
-
-async function fetchAndCacheFromYfinance(ticker: string, env: Env): Promise<string | null> {
-    const endDate = Math.floor(Date.now() / 1000);
-    const startDate = 0;
-    const yfinanceUrl = `https://query1.finance.yahoo.com/v7/finance/download/${ticker}?period1=${startDate}&period2=${endDate}&interval=1d&events=history&includeAdjustedClose=true`;
-    try {
-        const response = await fetch(yfinanceUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        if (!response.ok) throw new Error(`yfinance API 回傳錯誤: ${response.status}`);
-        const csvText = await response.text();
-        if (!csvText || !csvText.startsWith('Date,Open,High,Low,Close,Adj Close,Volume')) throw new Error(`yfinance 回傳的不是有效的 CSV 數據 for ${ticker}`);
-        
-        const lines = csvText.trim().split('\n');
-        const header = lines.shift()!.split(',');
-        const dateIndex = header.indexOf('Date');
-        const adjCloseIndex = header.indexOf('Adj Close');
-        if (dateIndex === -1 || adjCloseIndex === -1) throw new Error(`CSV 標頭中找不到 'Date' 或 'Adj Close' for ${ticker}`);
-        
-        const reformattedCsvLines = ['Date,Close'];
-        for (const line of lines) {
-            const values = line.split(',');
-            reformattedCsvLines.push(`${values[dateIndex]},${values[adjCloseIndex]}`);
-        }
-        const reformattedCsvText = reformattedCsvLines.join('\n');
-
-        await env.STOCK_DATA_BUCKET.put(`prices/${ticker}.csv`, reformattedCsvText, { httpMetadata: { contentType: 'text/csv', cacheExpiry: new Date(Date.now() + 4 * 60 * 60 * 1000) } });
-        return reformattedCsvText;
-    } catch (e: any) {
-        console.error(`從 yfinance 獲取 ${ticker} 失敗:`, e.message);
-        return null;
-    }
-}
+// --- 核心邏輯函式 (保持不變) ---
 
 function parseCsvToMap(csvText: string): Map<string, number> {
     const lines = csvText.trim().split('\n').slice(1);
@@ -159,7 +125,7 @@ function createAlignedPriceData(rawPriceData: { [ticker: string]: Map<string, nu
     const tickers = Object.keys(rawPriceData);
     tickers.forEach(ticker => { prices[ticker] = sortedDates.map(date => rawPriceData[ticker]?.get(date) || null); });
     const alignedDates: string[] = [];
-    const alignedPrices: { [ticker: string]: number[] } = {};
+    const alignedPrices: { [ticker:string]: number[] } = {};
     tickers.forEach(ticker => alignedPrices[ticker] = []);
     for (let i = 0; i < sortedDates.length; i++) {
         if (tickers.every(ticker => prices[ticker][i] !== null)) {
@@ -182,7 +148,6 @@ function runPortfolioSimulation(portfolio: PortfolioConfig, alignedData: any, in
     const { tickers, weights, rebalancingPeriod } = portfolio;
     const portfolioHistory: PriceHistory = [];
     if (tickers.length === 0 || alignedData.dates.length === 0) {
-        // 修正：確保呼叫 calculateMetrics 時傳遞所有必要的參數
         return { name: portfolio.name, ...calculateMetrics([], null, RISK_FREE_RATE), portfolioHistory: [] };
     }
     const rebalancingDates = getRebalancingDates(alignedData.dates, rebalancingPeriod);
@@ -283,7 +248,6 @@ function covariance(arr1: number[], arr2: number[]): number {
 }
 
 // --- 路由器設定 ---
-// 處理 CORS Preflight 請求
 router.all('*', (req) => {
     if (req.method === 'OPTIONS') {
         const headers = new Headers({
@@ -294,20 +258,34 @@ router.all('*', (req) => {
         return new Response(null, { headers });
     }
 });
-
-// 捕獲所有未匹配的路由，回傳 404
 router.all('*', () => error(404, '路由未找到 Not Found'));
 
-
 // --- Cloudflare Pages Functions 的進入點 ---
-// 這個 onFetch 函式會處理所有進入 /api/ 路徑的請求
 export const onRequest: PagesFunction<Env> = async (context) => {
+    // 由於檔案路徑是 /functions/api/[[path]].ts，itty-router 會自動處理 /api 前綴
+    // 我們需要手動將 /api 從 URL 中移除，才能讓 itty-router 正確匹配 /backtest
+    const url = new URL(context.request.url);
+    url.pathname = url.pathname.replace(/^\/api/, '');
+    const request = new Request(url, context.request);
+
     return router
-        .handle(context.request, context.env, context)
+        .handle(request, context.env, context)
         .catch((err) => {
-            // 這個 catch 會捕獲 itty-router 內部或路由處理函式中未被捕獲的異常
             console.error("在路由器中捕獲到未處理的異常:", err);
             return error(500, (err as Error).message || '伺服器發生未知錯誤');
         })
-        .then(finalizeResponse); // 無論成功或失敗，都通過此函式添加最終的標頭
+        .then(finalizeResponse);
 };
+```
+
+#### 2. 真正解決資料問題
+
+在您更新並部署了上述程式碼後，接下來請務必檢查您的資料更新流程。
+
+* **檢查 GitHub Actions:**
+    1.  前往您的 GitHub repository，點擊上方的 **"Actions"** 標籤頁。
+    2.  在左側選擇 **"Update Stock Data (Matrix Strategy)"** 這個工作流。
+    3.  查看最近的執行紀錄。如果看到有紅色的 `X`，就表示執行失敗了。點進去看日誌，找出失敗的原因（很可能是 `yfinance` 抓不到資料）。
+    4.  您可以點擊 "Run workflow" 按鈕手動執行一次，來獲取最新的資料並填充到 R2。
+
+完成這兩步後，您的回測系統就應該能完全正常運
