@@ -61,8 +61,8 @@ router.post('/api/backtest', async (request: IRequest, env: Env) => {
             let csvText: string | null;
 
             if (object === null) {
-                // R2 中沒有，從 yfinance 即時獲取並存入 R2
-                console.warn(`在 R2 中找不到 ${ticker}.csv，將嘗試從 yfinance 即時獲取。`);
+                // R2 中沒有或快取已過期，從 yfinance 即時獲取並存入 R2
+                console.warn(`在 R2 中找不到 ${ticker}.csv 或快取已過期，將嘗試從 yfinance 即時獲取。`);
                 csvText = await fetchAndCacheFromYfinance(ticker, env);
             } else {
                 // 從 R2 讀取
@@ -158,9 +158,15 @@ async function fetchAndCacheFromYfinance(ticker: string, env: Env): Promise<stri
         }
         const reformattedCsvText = reformattedCsvLines.join('\n');
 
-        // 將數據存入 R2。注意：這裡沒有設定 TTL，數據會留存直到被每日更新覆蓋
-        await env.STOCK_DATA_BUCKET.put(`prices/${ticker}.csv`, reformattedCsvText);
-        console.log(`已成功獲取 ${ticker} 的數據並存入 R2。`);
+        // 將數據存入 R2，並設定 4 小時的快取過期時間
+        // 這樣可以確保非核心標的（如台股）的數據不會過於陳舊
+        await env.STOCK_DATA_BUCKET.put(`prices/${ticker}.csv`, reformattedCsvText, {
+            httpMetadata: {
+                contentType: 'text/csv',
+                cacheExpiry: new Date(Date.now() + 4 * 60 * 60 * 1000), // 4 hours from now
+            },
+        });
+        console.log(`已成功獲取 ${ticker} 的數據並存入 R2 (4小時後過期)。`);
 
         return reformattedCsvText;
     } catch (e: any) {
