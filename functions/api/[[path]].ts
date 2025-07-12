@@ -29,7 +29,11 @@ const EPSILON = 1e-9;
 // --- 主路由器 (Main Router) ---
 const router = Router(); 
 
-// --- 輔助函式：為最終回應添加標頭 (Helper: Add Headers to Final Response) ---
+// --- 輔助函式 (Helper Functions) ---
+
+/**
+ * 為最終回應添加 CORS 標頭
+ */
 const finalizeResponse = (response: Response) => {
     const newHeaders = new Headers(response.headers);
     newHeaders.set('Access-Control-Allow-Origin', '*');
@@ -37,6 +41,65 @@ const finalizeResponse = (response: Response) => {
     newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     return new Response(response.body, { ...response, headers: newHeaders });
 };
+
+/**
+ * [新功能] 從 Yahoo Finance 獲取數據，並暫存到 R2
+ * @param ticker 股票代碼
+ * @param env 環境變數，包含 R2 儲存貯體
+ * @returns 成功時回傳 CSV 格式的字串，失敗時回傳 null
+ */
+async function fetchAndCacheFromYfinance(ticker: string, env: Env): Promise<string | null> {
+    console.log(`在 R2 中找不到 ${ticker}.csv，嘗試從 yfinance 即時獲取...`);
+    // 從 yfinance 下載從 1990 年至今的完整歷史數據
+    const endDate = Math.floor(Date.now() / 1000);
+    const startDate = 0; // 從最早的可用日期開始
+    const yfinanceUrl = `https://query1.finance.yahoo.com/v7/finance/download/${ticker}?period1=${startDate}&period2=${endDate}&interval=1d&events=history&includeAdjustedClose=true`;
+
+    try {
+        const response = await fetch(yfinanceUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!response.ok) {
+            throw new Error(`yfinance API 回傳錯誤狀態: ${response.status}`);
+        }
+        const originalCsvText = await response.text();
+        
+        // 驗證並重新格式化 CSV
+        if (!originalCsvText || !originalCsvText.startsWith('Date,Open,High,Low,Close,Adj Close,Volume')) {
+            throw new Error(`yfinance 回傳的不是有效的 CSV 數據 for ${ticker}`);
+        }
+        
+        const lines = originalCsvText.trim().split('\n');
+        const header = lines.shift()!.split(',');
+        const dateIndex = header.indexOf('Date');
+        const adjCloseIndex = header.indexOf('Adj Close');
+        if (dateIndex === -1 || adjCloseIndex === -1) {
+            throw new Error(`CSV 標頭中找不到 'Date' 或 'Adj Close' for ${ticker}`);
+        }
+        
+        const reformattedCsvLines = ['Date,Close'];
+        for (const line of lines) {
+            const values = line.split(',');
+            // 確保日期和價格存在
+            if(values[dateIndex] && values[adjCloseIndex]) {
+                reformattedCsvLines.push(`${values[dateIndex]},${values[adjCloseIndex]}`);
+            }
+        }
+        const reformattedCsvText = reformattedCsvLines.join('\n');
+
+        // 將重新格式化後的數據暫存到 R2，並設定 4 小時後過期
+        await env.STOCK_DATA_BUCKET.put(`prices/${ticker}.csv`, reformattedCsvText, {
+            httpMetadata: { contentType: 'text/csv' },
+            // 設定物件在 4 小時後自動刪除
+            expiration: new Date(Date.now() + 4 * 60 * 60 * 1000) 
+        });
+
+        console.log(`成功獲取並暫存 ${ticker} 的數據到 R2。`);
+        return reformattedCsvText;
+
+    } catch (e: any) {
+        console.error(`從 yfinance 獲取或暫存 ${ticker} 時失敗:`, e.message);
+        return null;
+    }
+}
 
 
 // --- API 路由 (API Route) ---
@@ -53,21 +116,31 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
         const rawPriceData: { [ticker: string]: Map<string, number> } = {};
         const missingTickers: string[] = [];
 
-        // 優化：平行地從 R2 獲取所有需要的 CSV 檔案
+        // 優化：平行地處理所有需要的股票
         const promises = Array.from(allTickers).map(async (ticker) => {
             const object = await env.STOCK_DATA_BUCKET.get(`prices/${ticker}.csv`);
-            if (object === null) {
-                missingTickers.push(ticker);
+            
+            let csvText: string | null = null;
+            if (object !== null) {
+                // 如果在 R2 找到，直接使用
+                csvText = await object.text();
             } else {
-                const csvText = await object.text();
+                // [新邏輯] 如果在 R2 找不到，則從 yfinance 獲取並暫存
+                csvText = await fetchAndCacheFromYfinance(ticker, env);
+            }
+
+            if (csvText) {
                 rawPriceData[ticker] = parseCsvToMap(csvText);
+            } else {
+                // 如果最終還是無法獲取數據，就記錄下來
+                missingTickers.push(ticker);
             }
         });
         await Promise.all(promises);
 
-        // 如果有任何股票資料缺失，就回傳一個清晰的錯誤訊息
+        // 如果在嘗試備援方案後，仍有股票資料缺失，就回傳錯誤
         if (missingTickers.length > 0) {
-            return error(400, `無法在 R2 儲存體中找到以下股票的數據，請檢查資料更新流程: ${missingTickers.join(', ')}`);
+            return error(400, `無法獲取以下股票的數據 (已嘗試從備援API抓取): ${missingTickers.join(', ')}`);
         }
 
         const alignedPriceData = createAlignedPriceData(rawPriceData, payload);
@@ -300,10 +373,6 @@ router.all('*', (req) => {
             },
         });
     }
-});
-// 將 404 處理放在 /backtest 之後，以避免攔截到有效路由
-router.post('/backtest', async (request: IRequest, env: Env) => {
-    // ... (the existing backtest logic)
 });
 router.all('*', () => error(404, '路由未找到 Not Found'));
 
