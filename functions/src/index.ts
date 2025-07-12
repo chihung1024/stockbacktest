@@ -23,8 +23,8 @@ type PriceHistory = { date: string; value: number }[];
 
 // --- 常數定義 ---
 const TRADING_DAYS_PER_YEAR = 252;
-const RISK_FREE_RATE = 0.0; // 可根據需要調整
-const EPSILON = 1e-9; // 用於避免除以零
+const RISK_FREE_RATE = 0.0;
+const EPSILON = 1e-9;
 
 // --- 主路由器 ---
 const router = Router();
@@ -54,16 +54,27 @@ router.post('/api/backtest', async (request: IRequest, env: Env) => {
             allTickers.add(payload.benchmark);
         }
 
-        // 2. 從 R2 平行讀取並解析所有 CSV 檔案
+        // 2. 從 R2 平行讀取，若無則從 yfinance 即時獲取
         const rawPriceData: { [ticker: string]: Map<string, number> } = {};
         const promises = Array.from(allTickers).map(async (ticker) => {
             const object = await env.STOCK_DATA_BUCKET.get(`prices/${ticker}.csv`);
-            if (!object) {
-                console.warn(`在 R2 中找不到 ${ticker}.csv`);
-                return;
-            };
-            const csvText = await object.text();
-            rawPriceData[ticker] = parseCsvToMap(csvText);
+            let csvText: string | null;
+
+            if (object === null) {
+                // R2 中沒有，從 yfinance 即時獲取並存入 R2
+                console.warn(`在 R2 中找不到 ${ticker}.csv，將嘗試從 yfinance 即時獲取。`);
+                csvText = await fetchAndCacheFromYfinance(ticker, env);
+            } else {
+                // 從 R2 讀取
+                csvText = await object.text();
+            }
+            
+            if (csvText) {
+                rawPriceData[ticker] = parseCsvToMap(csvText);
+            } else {
+                // 如果兩個來源都失敗，則拋出錯誤
+                throw new Error(`無法獲取股票 ${ticker} 的數據。`);
+            }
         });
         await Promise.all(promises);
 
@@ -82,7 +93,7 @@ router.post('/api/backtest', async (request: IRequest, env: Env) => {
 
         const benchmarkResult = benchmarkHistory ? {
             name: payload.benchmark,
-            ...calculateMetrics(benchmarkHistory, null, RISK_FREE_RATE), // 基準的 beta 為 1, alpha 為 0
+            ...calculateMetrics(benchmarkHistory, null, RISK_FREE_RATE),
             beta: 1.0,
             alpha: 0.0,
             portfolioHistory: benchmarkHistory
@@ -92,7 +103,7 @@ router.post('/api/backtest', async (request: IRequest, env: Env) => {
         return json({
             data: resultsData,
             benchmark: benchmarkResult,
-            warning: null // 已無警告
+            warning: null
         });
 
     } catch (e: any) {
@@ -107,10 +118,63 @@ router.all('*', () => error(404, 'Not Found'));
 // --- 核心邏輯函式 ---
 
 /**
+ * 從 yfinance 獲取數據，並存入 R2
+ */
+async function fetchAndCacheFromYfinance(ticker: string, env: Env): Promise<string | null> {
+    const endDate = Math.floor(Date.now() / 1000);
+    const startDate = 0; // 從最早的日期開始
+    const yfinanceUrl = `https://query1.finance.yahoo.com/v7/finance/download/${ticker}?period1=${startDate}&period2=${endDate}&interval=1d&events=history&includeAdjustedClose=true`;
+
+    try {
+        console.log(`正在從 yfinance 獲取 ${ticker} 的數據...`);
+        const response = await fetch(yfinanceUrl, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error(`yfinance API 回傳錯誤: ${response.status} ${response.statusText}`);
+        }
+
+        const csvText = await response.text();
+        if (!csvText || !csvText.startsWith('Date,Open,High,Low,Close,Adj Close,Volume')) {
+             throw new Error(`yfinance 回傳的不是有效的 CSV 數據 for ${ticker}`);
+        }
+
+        const lines = csvText.trim().split('\n');
+        const header = lines.shift()!.split(',');
+        const dateIndex = header.indexOf('Date');
+        const adjCloseIndex = header.indexOf('Adj Close');
+
+        if (dateIndex === -1 || adjCloseIndex === -1) {
+            throw new Error(`CSV 標頭中找不到 'Date' 或 'Adj Close' for ${ticker}`);
+        }
+        
+        const reformattedCsvLines = ['Date,Close'];
+        for (const line of lines) {
+            const values = line.split(',');
+            reformattedCsvLines.push(`${values[dateIndex]},${values[adjCloseIndex]}`);
+        }
+        const reformattedCsvText = reformattedCsvLines.join('\n');
+
+        // 將數據存入 R2。注意：這裡沒有設定 TTL，數據會留存直到被每日更新覆蓋
+        await env.STOCK_DATA_BUCKET.put(`prices/${ticker}.csv`, reformattedCsvText);
+        console.log(`已成功獲取 ${ticker} 的數據並存入 R2。`);
+
+        return reformattedCsvText;
+    } catch (e: any) {
+        console.error(`從 yfinance 獲取 ${ticker} 失敗:`, e.message);
+        return null;
+    }
+}
+
+
+/**
  * 解析 CSV 文字檔，轉換成日期到價格的 Map
  */
 function parseCsvToMap(csvText: string): Map<string, number> {
-    const lines = csvText.trim().split('\n').slice(1); // 忽略標題行
+    const lines = csvText.trim().split('\n').slice(1);
     const priceMap = new Map<string, number>();
     for (const line of lines) {
         const [date, price] = line.split(',');
@@ -143,7 +207,6 @@ function createAlignedPriceData(rawPriceData: { [ticker: string]: Map<string, nu
         prices[ticker] = sortedDates.map(date => rawPriceData[ticker].get(date) || null);
     });
 
-    // 移除包含任何 null 值的日期 (模擬 pandas.dropna())
     const alignedDates: string[] = [];
     const alignedPrices: { [ticker: string]: number[] } = {};
     tickers.forEach(ticker => alignedPrices[ticker] = []);
@@ -185,7 +248,6 @@ function runSingleAssetSimulation(ticker: string, alignedData: any, initialAmoun
 }
 
 /**
-
  * 執行投資組合回測的主函式
  */
 function runPortfolioSimulation(portfolio: PortfolioConfig, alignedData: any, initialAmount: number, benchmarkHistory: PriceHistory | null) {
@@ -198,14 +260,11 @@ function runPortfolioSimulation(portfolio: PortfolioConfig, alignedData: any, in
 
     const rebalancingDates = getRebalancingDates(alignedData.dates, rebalancingPeriod);
     let shares = new Array(tickers.length).fill(0);
-    let cash = initialAmount;
 
-    // 初始投資
     const initialPrices = tickers.map(ticker => alignedData.prices[ticker][0]);
     const normalizedWeights = weights.map(w => w / 100);
     shares = normalizedWeights.map((w, i) => (initialAmount * w) / (initialPrices[i] + EPSILON));
 
-    // 模擬每一天
     for (let i = 0; i < alignedData.dates.length; i++) {
         const currentDate = alignedData.dates[i];
         const currentPrices = tickers.map(ticker => alignedData.prices[ticker][i]);
@@ -213,7 +272,6 @@ function runPortfolioSimulation(portfolio: PortfolioConfig, alignedData: any, in
         const currentValue = shares.reduce((sum, s, j) => sum + s * currentPrices[j], 0);
         portfolioHistory.push({ date: currentDate, value: currentValue });
 
-        // 檢查是否需要再平衡
         if (rebalancingDates.has(currentDate)) {
              shares = normalizedWeights.map((w, j) => (currentValue * w) / (currentPrices[j] + EPSILON));
         }
@@ -248,7 +306,6 @@ function getRebalancingDates(dates: string[], period: string): Set<string> {
             lastMarker = currentMarker;
         }
     }
-    // 移除第一個日期，因為初始投資不算再平衡
     if (dates.length > 0) {
         rebalanceDates.delete(dates[0]);
     }
@@ -311,7 +368,6 @@ function calculateMetrics(portfolioHistory: PriceHistory, benchmarkHistory: Pric
             benchReturns.push(benchmarkHistory[i].value / benchmarkHistory[i - 1].value - 1);
         }
 
-        // 對齊收益率 (簡易版)
         const alignedLength = Math.min(dailyReturns.length, benchReturns.length);
         const pReturns = dailyReturns.slice(0, alignedLength);
         const bReturns = benchReturns.slice(0, alignedLength);
