@@ -6,7 +6,7 @@ on:
     branches:
       - main
   
-  # 新增: 允許在 GitHub Actions 頁面手動觸發此工作流
+  # 允許在 GitHub Actions 頁面手動觸發此工作流
   workflow_dispatch: {}
 
 jobs:
@@ -21,8 +21,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # 建議加上 npm 的快取以加速未來建置
-          cache: 'npm'
+          # 移除 cache: 'npm' 選項，因為專案中缺少 package-lock.json 檔案
+          # 最佳實踐是執行 npm install 並將產生的 package-lock.json 提交到您的儲存庫中，然後再重新啟用此快取功能。
       
       - name: Install dependencies
         run: npm install
