@@ -1,13 +1,17 @@
-# 這是您在 Cloudflare 上的 Pages 專案名稱，必須與專案名稱完全相符
+# wrangler.toml
+
+# 這是您在 Cloudflare 上的 Pages 專案名稱
+# 請記得將 "stockbacktest-deploy" 換成您在步驟一中建立的最新專案名稱
 name = "stockbacktest-final"
-
-# 這個欄位告訴 Cloudflare Pages，您的靜態網站檔案在哪個資料夾
-pages_build_output_dir = "public"
-
-# 您的 Worker (現在是 Pages 的一部分) 的相容性日期
-compatibility_date = "2023-10-30"
 
 # 這是將 R2 儲存貯體「繫結」到您 Worker 的設定
 [[r2_buckets]]
 binding = "STOCK_DATA_BUCKET"
 bucket_name = "stockbacktest-data"
+
+# [新增] 這是告訴 Wrangler 我們 Pages 專案的結構
+[pages_build_output]
+# 靜態檔案的目錄
+dir = "public"
+# Pages Functions 的根目錄
+functions-root = "functions"
