@@ -27,11 +27,21 @@ const RISK_FREE_RATE = 0.0;
 const EPSILON = 1e-9;
 
 // --- 主路由器 ---
-// 由於我們現在使用 [[path]].ts，API 路由會自動以 /api/ 開始
 const router = Router({ base: '/api' });
+
+// --- 輔助函式：為最終回應添加標頭 ---
+const finalizeResponse = (response: Response) => {
+    const newHeaders = new Headers(response.headers);
+    newHeaders.set('Access-Control-Allow-Origin', '*');
+    newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return new Response(response.body, { ...response, headers: newHeaders });
+};
+
 
 // --- API 路由 ---
 router.post('/backtest', async (request: IRequest, env: Env) => {
+    // 這裡的 try...catch 捕捉核心業務邏輯的錯誤
     try {
         const payload: BacktestPayload = await request.json();
         
@@ -56,6 +66,7 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
             if (csvText) {
                 rawPriceData[ticker] = parseCsvToMap(csvText);
             } else {
+                // 如果任何一個 ticker 數據獲取失敗，就拋出錯誤
                 throw new Error(`無法獲取股票 ${ticker} 的數據。`);
             }
         });
@@ -63,6 +74,7 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
 
         const alignedPriceData = createAlignedPriceData(rawPriceData, payload);
         if (alignedPriceData.dates.length < 2) {
+             // 使用 itty-router 的 error helper 回傳一個帶有 400 狀態的 Response
              return error(400, '在指定的時間範圍內，找不到足夠的共同交易日來進行回測。');
         }
 
@@ -80,6 +92,7 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
             portfolioHistory: benchmarkHistory
         } : null;
         
+        // 使用 itty-router 的 json helper 回傳一個帶有 200 狀態的 Response
         return json({
             data: resultsData,
             benchmark: benchmarkResult,
@@ -88,11 +101,12 @@ router.post('/backtest', async (request: IRequest, env: Env) => {
 
     } catch (e: any) {
         console.error("回測時發生錯誤:", e.stack);
+        // 如果 try 區塊中發生任何錯誤，回傳一個 500 狀態的 Response
         return error(500, `伺服器內部錯誤: ${e.message}`);
     }
 });
 
-// --- 核心邏輯函式 (與之前版本相同) ---
+// --- 核心邏輯函式 (與之前版本相同，但有小修正) ---
 
 async function fetchAndCacheFromYfinance(ticker: string, env: Env): Promise<string | null> {
     const endDate = Math.floor(Date.now() / 1000);
@@ -167,7 +181,10 @@ function runSingleAssetSimulation(ticker: string, alignedData: any, initialAmoun
 function runPortfolioSimulation(portfolio: PortfolioConfig, alignedData: any, initialAmount: number, benchmarkHistory: PriceHistory | null) {
     const { tickers, weights, rebalancingPeriod } = portfolio;
     const portfolioHistory: PriceHistory = [];
-    if (tickers.length === 0 || alignedData.dates.length === 0) return { name: portfolio.name, ...calculateMetrics([]), portfolioHistory: [] };
+    if (tickers.length === 0 || alignedData.dates.length === 0) {
+        // 修正：確保呼叫 calculateMetrics 時傳遞所有必要的參數
+        return { name: portfolio.name, ...calculateMetrics([], null, RISK_FREE_RATE), portfolioHistory: [] };
+    }
     const rebalancingDates = getRebalancingDates(alignedData.dates, rebalancingPeriod);
     const initialPrices = tickers.map(ticker => alignedData.prices[ticker][0]);
     const normalizedWeights = weights.map(w => w / 100);
@@ -265,31 +282,32 @@ function covariance(arr1: number[], arr2: number[]): number {
     return cov / arr1.length;
 }
 
+// --- 路由器設定 ---
+// 處理 CORS Preflight 請求
+router.all('*', (req) => {
+    if (req.method === 'OPTIONS') {
+        const headers = new Headers({
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        });
+        return new Response(null, { headers });
+    }
+});
+
+// 捕獲所有未匹配的路由，回傳 404
+router.all('*', () => error(404, '路由未找到 Not Found'));
+
+
 // --- Cloudflare Pages Functions 的進入點 ---
 // 這個 onFetch 函式會處理所有進入 /api/ 路徑的請求
 export const onRequest: PagesFunction<Env> = async (context) => {
-    // 處理 CORS Preflight
-    if (context.request.method === 'OPTIONS') {
-        return new Response(null, {
-            headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-            },
-        });
-    }
-
-    // 將請求交給 itty-router 處理
-    return router.handle(context.request, context.env, context)
-        .then(response => {
-            const newHeaders = new Headers(response.headers);
-            newHeaders.set('Access-Control-Allow-Origin', '*');
-            return new Response(response.body, { ...response, headers: newHeaders });
+    return router
+        .handle(context.request, context.env, context)
+        .catch((err) => {
+            // 這個 catch 會捕獲 itty-router 內部或路由處理函式中未被捕獲的異常
+            console.error("在路由器中捕獲到未處理的異常:", err);
+            return error(500, (err as Error).message || '伺服器發生未知錯誤');
         })
-        .catch(err => {
-            const response = error(err.status || 500, err.message);
-            const newHeaders = new Headers(response.headers);
-            newHeaders.set('Access-Control-Allow-Origin', '*');
-            return new Response(response.body, { ...response, headers: newHeaders });
-        });
+        .then(finalizeResponse); // 無論成功或失敗，都通過此函式添加最終的標頭
 };
