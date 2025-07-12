@@ -1,9 +1,13 @@
 name: Deploy to Cloudflare
 
 on:
+  # 當有程式碼推送到 main 分支時觸發
   push:
     branches:
-      - main # 當 main 分支有更新時觸發
+      - main
+  
+  # 新增: 允許在 GitHub Actions 頁面手動觸發此工作流
+  workflow_dispatch: {}
 
 jobs:
   deploy:
@@ -17,13 +21,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          # 已移除 cache: 'npm' 這一行來解決 lock file not found 的錯誤
+          # 建議加上 npm 的快取以加速未來建置
+          cache: 'npm'
       
       - name: Install dependencies
         run: npm install
 
       - name: Deploy to Cloudflare Pages
         env:
+          # CLOUDFLARE_API_TOKEN 和 CLOUDFLARE_ACCOUNT_ID 需設定在 GitHub > Settings > Secrets and variables > Actions
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
